@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Puppet‑X: Pixie & Beast · Prototype</title>
+  <title>Puppet‑X: Pixie, Beast & Narzis · Prototype</title>
   <style>
     :root{--bg:#0b0b12;--ink:#e8e8f0;--accent:#8ae3ff;--accent2:#ff8ad8;--warn:#ffb366}
     html,body{height:100%;margin:0;background:radial-gradient(1200px 700px at 70% -10%, #172033 0%, #0b0b12 60%);} 
@@ -31,7 +31,7 @@
   <header>
     <div class="toolbar">
       <span class="title">Puppet‑X: Pixie & Beast</span>
-      <span class="sub">Arrows move · Space jump · E talk · Q summon Nema · F Beast strike · R restart</span>
+      <span class="sub">Arrows move · Space jump · E talk / resist · Q summon Nema · F Beast attack · R restart</span>
     </div>
     <div class="toolbar">
       <label class="btn" for="assetPicker">Add Your Drawing (Pixie)</label>
@@ -44,6 +44,10 @@
     <canvas id="game" width="960" height="540" aria-label="Game canvas" tabindex="0"></canvas>
     <div id="hud">
       <div class="pill">Sparks: <span id="score">0</span></div>
+      <div class="pill">Best: <span id="best">0</span></div>
+      <div class="pill">Energy: <span id="energy">100</span></div>
+      <div class="pill"><span class="key">E</span> talk/resist · <span class="key">Q</span> summon Nema · <span class="key">F</span> Beast attack</div>
+    </div>
       <div class="pill">Best: <span id="best">0</span></div>
       <div class="pill"><span class="key">E</span> talk · <span class="key">Q</span> summon Nema · <span class="key">F</span> Beast attack</div>
     </div>
@@ -60,29 +64,31 @@
   const ctx = canvas.getContext('2d');
   const scoreEl = document.getElementById('score');
   const bestEl = document.getElementById('best');
+  const energyEl = document.getElementById('energy');
   const pauseBtn = document.getElementById('pauseBtn');
   const assetPicker = document.getElementById('assetPicker');
   const dialogEl = document.getElementById('dialog');
   const dnameEl = document.getElementById('dname');
   const dtextEl = document.getElementById('dtext');
 
-  function fit() {
-    const pad = 16; const w = window.innerWidth - pad*2; const h = window.innerHeight - pad*2 - 80; const scale = Math.min(w / canvas.width, h / canvas.height); canvas.style.transform = `scale(${scale})`;
-  }
+  function fit() { const pad = 16; const w = window.innerWidth - pad*2; const h = window.innerHeight - pad*2 - 80; const scale = Math.min(w / canvas.width, h / canvas.height); canvas.style.transform = `scale(${scale})`; }
   window.addEventListener('resize', fit); fit();
 
   const rand = (min, max) => Math.random() * (max - min) + min;
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
   // World constants
   const G = 2100, FRICTION = 0.88; const WIDTH = canvas.width, HEIGHT = canvas.height; const groundY = HEIGHT - 60;
 
   // ==== Characters ====
-  // Pixie (player) — can use a custom image
+  // Pixie (player)
   const pixie = { x: 120, y: groundY - 18, r: 18, vx:0, vy:0, onGround:true, img:null, scale:1.8, name:'Pixie' };
-  // Beast (female chihuahua) — companion & attack
+  // Beast (female chihuahua)
   const beast = { x: pixie.x - 48, y: pixie.y, r: 9, vx:0, vy:0, cooldown:0, attacking:false, target:null };
-  // Nema — ancient wooden trunk (summoned guide)
+  // Nema — summoned guide
   const nema = { active:false, x: WIDTH/2, y: groundY-50, w:70, h:50, timer:0 };
+  // Narzis — stalking antagonist
+  const narzis = { active:false, x: WIDTH + 140, y: groundY - 28, w:28, h:42, vx:-120, lungeTimer:3.5, gaslight:false, gasTimer:0, stun:0, hp:100 };
 
   // Objects
   const sparks = []; const spikes = []; const npcs = [];
@@ -95,14 +101,15 @@
   // Pause
   let paused=false; pauseBtn.onclick=()=>{paused=!paused; pauseBtn.setAttribute('aria-pressed',paused); pauseBtn.textContent=paused?'Resume':'Pause';};
 
-  // Score
+  // Score & Energy
   let score=0; let best=Number(localStorage.getItem('puppetronics_best')||0); bestEl.textContent=best;
+  const ENERGY_MAX = 100; let energy = ENERGY_MAX; energyEl.textContent = energy;
 
   // Particles
   const particles=[]; function emit(x,y,base,color){ for(let i=0;i<base;i++) particles.push({x,y,vx:rand(-120,120), vy:rand(-220,-40), life:rand(.3,.8), age:0, color}); }
 
   // Spawners
-  let tSpark=0, tSpike=0, tNPC=2.5;
+  let tSpark=0, tSpike=0, tNPC=2.5, tNarzis=6.0; // Narzis appears a few seconds in
   function spawnSpark(){ const y = rand(groundY-140, groundY-240); sparks.push({x: WIDTH + 40, y, r: 8, vx: -220}); }
   function spawnSpike(){ const size = 26; spikes.push({x: WIDTH + 60, y: groundY - size, w: size, h: size, vx: -240}); }
   function spawnNPC(){ npcs.push({x: WIDTH+40, y: groundY-34, r: 14, vx:-200}); }
@@ -112,60 +119,46 @@
   const dist = (a,b)=>Math.hypot(a.x-b.x, a.y-b.y);
 
   // ==== Dialogue System ====
-  const Dialogue = {
-    active:false, idx:0, charIdx:0, current:null, speed:2.1, buffer:'', onEnd:null, queue:[],
+  const Dialogue = { active:false, idx:0, charIdx:0, current:null, speed:2.1, buffer:'', onEnd:null, queue:[],
     start(seq, onEnd){ this.active=true; this.idx=0; this.charIdx=0; this.queue=seq; this.onEnd=onEnd||null; this.current=this.queue[0]; dnameEl.textContent=this.current.name; dtextEl.textContent=''; dialogEl.style.display='block'; },
     close(){ this.active=false; dialogEl.style.display='none'; this.buffer=''; },
     next(){ this.idx++; if (this.idx>=this.queue.length){ this.close(); this.queue=[]; if(this.onEnd) this.onEnd(); return; } this.current=this.queue[this.idx]; this.charIdx=0; this.buffer=''; dnameEl.textContent=this.current.name; dtextEl.textContent=''; },
     update(dt){ if(!this.active) return; const target=this.current.text; this.charIdx=Math.min(target.length, this.charIdx + this.speed); this.buffer=target.slice(0, Math.floor(this.charIdx)); dtextEl.textContent=this.buffer; }
   };
 
-  // Opening narrative (acts as tutorial + lore seeds)
+  // Opening narrative
   const introScript = [
-    {name:'Pixie', text:'Where are we, Beast?
-Everything hums… like light inside wires.'},
-    {name:'Beast', text:'(soft growl) yip. Ready claws.'},
-    {name:'Echo', text:'Find the Rock that remembers. Your voice will follow.'},
+    {name:'Pixie', text:'Beast… everything hums like light inside wires.'},
+    {name:'Echo', text:'Seek the Rock that remembers. Your voice will follow.'},
     {name:'Nema', text:'I am Nema, trunk of ages. Summon me with Q when the path tilts. Balance will be restored.'},
-    {name:'Pixie', text:'Pixie—that is what they call me. A nickname… for something bigger?'}
+    {name:'Pixie', text:'They call me Pixie. A small word for… something larger.'}
   ];
 
-  // Contextual dialogue near a spirit orb
-  function talkSpirit(){
-    Dialogue.start([
-      {name:'Spirit', text:'Traveler of fiber and light, gather three sparks and I will part the hazards.'},
-      {name:'Pixie', text:'Beast, on me. We collect and we dance.'}
-    ]);
-  }
+  function talkSpirit(){ Dialogue.start([
+      {name:'Spirit', text:'Gather three sparks and I will part the hazards.'},
+      {name:'Pixie', text:'We collect. We dance.'}
+    ]); }
 
-  // Secret seeds (future revelations — not stated outright)
   const seeds = [
     {name:'Echo', text:'A voice once quiet learns to resonate.'},
     {name:'Nema', text:'Balance is not the end of motion. It is motion with purpose.'},
-    {name:'Pixie', text:'Sometimes I dream of hands shaping paper… and a name spoken in another room.'}
+    {name:'Pixie', text:'Sometimes I dream of hands shaping paper… and a name spoken far away.'}
   ];
 
-  // Start intro once at first frame
   let didIntro=false;
-
-  // Try talk near NPC
   function tryTalk(){ for(const n of npcs){ if (dist(n, pixie) < 70){ talkSpirit(); break; } } }
 
-  // Summon Nema (Q)
-  function summonNema(){ nema.active = true; nema.timer = 3.5; nema.x = pixie.x + 60; nema.y = groundY - 50; }
+  function summonNema(){ nema.active = true; nema.timer = 3.5; nema.x = pixie.x + 60; nema.y = groundY - 50; if (narzis.active){ narzis.stun = Math.max(narzis.stun, 1.2); } }
 
-  // Beast strike (F): leaps vertically to nearest spike ahead and destroys it
-  function beastStrike(){
-    if (beast.cooldown>0) return; let target=null; let bestDx=Infinity;
-    for (const sp of spikes){ const dx = sp.x - pixie.x; if (dx>0 && dx<bestDx) { bestDx=dx; target=sp; } }
-    if (!target) return; beast.attacking=true; beast.target=target; beast.cooldown=1.6; emit(beast.x, beast.y, 10, 'rgba(255,255,255,.8)');
-  }
+  function beastStrike(){ if (beast.cooldown>0) return; let target=null; let preferNarzis = narzis.active && dist(narzis, pixie) < 260; if (preferNarzis) target = narzis; else {
+      let bestDx=Infinity; for (const sp of spikes){ const dx = sp.x - pixie.x; if (dx>0 && dx<bestDx){ bestDx=dx; target=sp; } }
+    } if (!target) return; beast.attacking=true; beast.target=target; beast.cooldown=1.6; emit(beast.x, beast.y, 10, 'rgba(255,255,255,.8)'); }
 
-  // Keybinds for story actions
+  // Keybinds
   window.addEventListener('keydown', e => {
     if ((e.key==='r'||e.key==='R') && gameOver) reset();
     if (Dialogue.active){ if (e.key==='Escape'){ Dialogue.close(); } if (e.key===' '||e.key==='Enter'){ e.preventDefault(); if (Dialogue.buffer!==Dialogue.current?.text){ Dialogue.charIdx = (Dialogue.current?.text||'').length; } else { Dialogue.next(); } } return; }
-    if (e.key.toLowerCase()==='e') tryTalk();
+    if (e.key.toLowerCase()==='e') { if (narzis.active && dist(narzis, pixie)<120) resistNarzis(); else tryTalk(); }
     if (e.key.toLowerCase()==='q') summonNema();
     if (e.key.toLowerCase()==='f') beastStrike();
   });
@@ -178,125 +171,126 @@ Everything hums… like light inside wires.'},
 
   // Game state
   let gameOver=false;
-  function reset(){ pixie.x=120; pixie.y=groundY - pixie.r; pixie.vx=0; pixie.vy=0; pixie.onGround=true; beast.x=pixie.x-48; beast.y=pixie.y; beast.vx=0; beast.vy=0; beast.cooldown=0; beast.attacking=false; beast.target=null; sparks.length=0; spikes.length=0; particles.length=0; npcs.length=0; tSpark=0; tSpike=0; tNPC=2.5; score=0; scoreEl.textContent=score; gameOver=false; Dialogue.close(); nema.active=false; didIntro=false; }
+  function reset(){ pixie.x=120; pixie.y=groundY - pixie.r; pixie.vx=0; pixie.vy=0; pixie.onGround=true; beast.x=pixie.x-48; beast.y=pixie.y; beast.vx=0; beast.vy=0; beast.cooldown=0; beast.attacking=false; beast.target=null; sparks.length=0; spikes.length=0; particles.length=0; npcs.length=0; tSpark=0; tSpike=0; tNPC=2.5; score=0; scoreEl.textContent=score; gameOver=false; Dialogue.close(); nema.active=false; didIntro=false; energy=ENERGY_MAX; energyEl.textContent=energy; narzis.active=false; tNarzis=6.0; }
 
   // Main loop
   let last = performance.now();
   function frame(now){ requestAnimationFrame(frame); const dt = Math.min(0.033, (now - last) / 1000); if (paused){ last=now; return; } update(dt); draw(); last=now; }
   requestAnimationFrame(frame);
 
+  function spawnNarzis(){ narzis.active=true; narzis.x = WIDTH + 140; narzis.y = groundY - 28; narzis.vx = -120; narzis.lungeTimer = rand(2.5,4.0); narzis.gaslight=false; narzis.gasTimer=0; narzis.stun=0; narzis.hp=100; Dialogue.start([
+    {name:'Narzis', text:'There you are, Pixie. I carry your truths. Without me, you are nothing.'},
+    {name:'Pixie', text:'No. You carry my **shadows**, not my truth.'}
+  ]); }
+
+  function resistNarzis(){ if (!narzis.active) return; Dialogue.start([
+      {name:'Narzis', text:'You owe me your life. You were made of my suffering.'},
+      {name:'Pixie', text:'I owe you nothing. My voice is my own.'}
+    ], ()=>{ narzis.stun = Math.max(narzis.stun, 1.0); }); }
+
   function update(dt){
     if (!didIntro){ Dialogue.start(introScript, ()=>{}); didIntro=true; }
 
-    // Input → velocity (disabled during dialogue)
+    // Timers & spawns
+    tSpark-=dt; tSpike-=dt; tNPC-=dt; tNarzis-=dt;
+    if (!Dialogue.active){ if (tSpark<=0){ spawnSpark(); tSpark=rand(0.8,1.6);} if (tSpike<=0){ spawnSpike(); tSpike=rand(1.0,2.1);} if (tNPC<=0){ spawnNPC(); tNPC=rand(6,10);} if (tNarzis<=0 && !narzis.active){ spawnNarzis(); } }
+
+    // Input → motion (disabled during dialogue)
     const speed = 460;
     if (!gameOver){
-      if (!Dialogue.active){
-        if (keys.has('arrowleft')||keys.has('a')) pixie.vx=-speed; else if (keys.has('arrowright')||keys.has('d')) pixie.vx=speed; else pixie.vx*=FRICTION;
-        if ((keys.has(' ')||keys.has('arrowup')||keys.has('w')) && pixie.onGround){ pixie.vy=-720; pixie.onGround=false; emit(pixie.x, pixie.y+pixie.r, 12, 'rgba(255,255,255,.6)'); }
-      } else { pixie.vx*=FRICTION; }
+      if (!Dialogue.active){ if (keys.has('arrowleft')||keys.has('a')) pixie.vx=-speed; else if (keys.has('arrowright')||keys.has('d')) pixie.vx=speed; else pixie.vx*=FRICTION; if ((keys.has(' ')||keys.has('arrowup')||keys.has('w')) && pixie.onGround){ pixie.vy=-720; pixie.onGround=false; emit(pixie.x, pixie.y+pixie.r, 12, 'rgba(255,255,255,.6)'); } }
+      else { pixie.vx*=FRICTION; }
     } else { pixie.vx*=FRICTION; }
 
-    // Gravity
-    pixie.vy += G*dt;
+    // Gravity & integration
+    pixie.vy += G*dt; pixie.x += pixie.vx*dt; pixie.y += pixie.vy*dt; pixie.x = clamp(pixie.x, pixie.r, WIDTH - pixie.r); if (pixie.y + pixie.r >= groundY){ pixie.y = groundY - pixie.r; pixie.vy = 0; pixie.onGround = true; }
 
-    // Integrate & ground
-    pixie.x += pixie.vx*dt; pixie.y += pixie.vy*dt; pixie.x = Math.max(pixie.r, Math.min(WIDTH - pixie.r, pixie.x)); if (pixie.y + pixie.r >= groundY){ pixie.y = groundY - pixie.r; pixie.vy = 0; pixie.onGround = true; }
-
-    // Beast follows or attacks
+    // Beast behavior
     if (beast.cooldown>0) beast.cooldown -= dt;
-    if (beast.attacking && beast.target){
-      // vertical leap to target
-      const tx = beast.target.x + beast.target.w/2; const ty = beast.target.y;
-      const dx = tx - beast.x; const dy = ty - beast.y; const step = 820*dt;
-      const len = Math.hypot(dx,dy) || 1; beast.x += (dx/len)*step; beast.y += (dy/len)*step;
-      if (Math.hypot(beast.x-tx, beast.y-ty) < 12){
-        // destroy spike
-        const i = spikes.indexOf(beast.target); if (i>-1){ const sp=spikes[i]; emit(sp.x, sp.y, 28, 'rgba(255,179,102,.95)'); spikes.splice(i,1); score += 5; scoreEl.textContent = score; }
-        beast.attacking=false; beast.target=null; emit(beast.x, beast.y-6, 16, 'rgba(255,255,255,.9)');
-      }
-    } else {
-      // follow Pixie with playful spring
-      const k=12, damping=0.85; let dx = pixie.x - beast.x - 36; let dy = pixie.y - beast.y + 4; beast.vx = (beast.vx||0)*damping + dx*k*dt; beast.vy = (beast.vy||0)*damping + dy*k*dt; beast.x += beast.vx*dt; beast.y += beast.vy*dt;
-    }
+    if (beast.attacking && beast.target){ const tx = (beast.target.x ?? (beast.target.x)); const ty = (beast.target.y ?? (beast.target.y)); const tw = (beast.target.w||0); const th = (beast.target.h||0); const gx = tx + (tw? tw/2:0); const gy = ty; const dx = gx - beast.x; const dy = gy - beast.y; const step = 820*dt; const len = Math.hypot(dx,dy)||1; beast.x += (dx/len)*step; beast.y += (dy/len)*step; if (Math.hypot(beast.x-gx, beast.y-gy) < 12){ if (beast.target===narzis){ narzis.stun = Math.max(narzis.stun, 1.2); narzis.hp -= 20; emit(gx, gy, 32, 'rgba(255,255,255,.95)'); } else { const i = spikes.indexOf(beast.target); if (i>-1){ const sp=spikes[i]; emit(sp.x, sp.y, 28, 'rgba(255,179,102,.95)'); spikes.splice(i,1); score += 5; scoreEl.textContent = score; } } beast.attacking=false; beast.target=null; emit(beast.x, beast.y-6, 16, 'rgba(255,255,255,.9)'); } } else { const k=12, damping=0.85; let dx = pixie.x - beast.x - 36; let dy = pixie.y - beast.y + 4; beast.vx = (beast.vx||0)*damping + dx*k*dt; beast.vy = (beast.vy||0)*damping + dy*k*dt; beast.x += beast.vx*dt; beast.y += beast.vy*dt; }
 
-    // Spawns (only when not in dialogue)
-    tSpark-=dt; tSpike-=dt; tNPC-=dt; if (!Dialogue.active){ if (tSpark<=0){ spawnSpark(); tSpark=rand(0.8,1.6);} if (tSpike<=0){ spawnSpike(); tSpike=rand(1.0,2.1);} if (tNPC<=0){ spawnNPC(); tNPC=rand(6,10);} }
-
-    // Move objects
+    // Move world
     for (const s of sparks){ s.x += s.vx*dt; if (s.x<-40) s.remove=true; }
     for (const sp of spikes){ sp.x += sp.vx*dt; }
     for (const n of npcs){ n.x += n.vx*dt; if (n.x<-60) n.remove=true; }
 
-    // Collect spark
-    for (let i=sparks.length-1;i>=0;i--){ const s=sparks[i]; if (circleRectCollide(pixie.x, pixie.y, pixie.r, s.x-s.r, s.y-s.r, s.r*2, s.r*2)){ sparks.splice(i,1); score+=10; scoreEl.textContent=score; emit(s.x, s.y, 18, 'rgba(138,227,255,.9)'); if (score%30===0){ // every 3 sparks, a lore seed
-          Dialogue.start([seeds[Math.floor(Math.random()*seeds.length)]]);
-        }
-      } else if (s.remove) { sparks.splice(i,1); }
+    // Collect spark → seeds occasionally
+    for (let i=sparks.length-1;i>=0;i--){ const s=sparks[i]; if (circleRectCollide(pixie.x, pixie.y, pixie.r, s.x-s.r, s.y-s.r, s.r*2, s.r*2)){ sparks.splice(i,1); score+=10; scoreEl.textContent=score; emit(s.x, s.y, 18, 'rgba(138,227,255,.9)'); if (score%30===0){ Dialogue.start([seeds[Math.floor(Math.random()*seeds.length)]]); } } else if (s.remove) { sparks.splice(i,1); } }
+
+    // Narzis AI
+    if (narzis.active){
+      if (narzis.stun>0){ narzis.stun -= dt; }
+      else {
+        // follow
+        const dir = Math.sign(pixie.x - narzis.x) || 1; narzis.x += dir * 120 * dt;
+        narzis.lungeTimer -= dt; if (narzis.lungeTimer<=0){ narzis.vx = dir * 420; narzis.x += narzis.vx * dt; narzis.lungeTimer = rand(2.2,3.6); }
+        // gaslight trigger
+        if (!narzis.gaslight && Math.abs(pixie.x - narzis.x) < 120){ narzis.gaslight = true; narzis.gasTimer = 2.5; Dialogue.start([
+            {name:'Narzis', text:'All your strength is borrowed. You are a puppet of my pain.'},
+            {name:'Pixie', text:'My strength is chosen. Not owed.'}
+          ]); }
+      }
+      // drain energy when gaslighting and player not resisting (no keys pressed within the dialogue)
+      if (narzis.gaslight){ narzis.gasTimer -= dt; energy -= 12 * dt; energy = clamp(energy, 0, ENERGY_MAX); energyEl.textContent = Math.round(energy); if (narzis.gasTimer<=0){ narzis.gaslight=false; }
+        if (energy<=0) gameOver = true;
+      }
+      // Beast or Nema might knock him back already via stun
+      if (narzis.hp<=0){ narzis.active=false; emit(narzis.x, narzis.y, 40, 'rgba(255,138,216,.95)'); score += 30; scoreEl.textContent = score; Dialogue.start([{name:'Echo', text:'Gaslight dimmed. The voice remains.'}]); }
     }
 
     // Hazard collision (disabled during dialogue)
-    if (!gameOver && !Dialogue.active){
-      for (const sp of spikes){ if (circleRectCollide(pixie.x, pixie.y, pixie.r, sp.x, sp.y, sp.w, sp.h)){ gameOver=true; emit(pixie.x, pixie.y, 36, 'rgba(255,179,102,.95)'); best=Math.max(best,score); localStorage.setItem('puppetronics_best', best); bestEl.textContent=best; break; } }
-    }
+    if (!gameOver && !Dialogue.active){ for (const sp of spikes){ if (circleRectCollide(pixie.x, pixie.y, pixie.r, sp.x, sp.y, sp.w, sp.h)){ gameOver=true; emit(pixie.x, pixie.y, 36, 'rgba(255,179,102,.95)'); best=Math.max(best,score); localStorage.setItem('puppetronics_best', best); bestEl.textContent=best; break; } } }
 
-    // Nema timer effect: when active, gently lifts nearest three spikes upward ("balancing")
-    if (nema.active){ nema.timer -= dt; if (nema.timer<=0){ nema.active=false; } else {
-        // lift up to three closest spikes
-        const sorted = [...spikes].sort((a,b)=>Math.abs(a.x-pixie.x)-Math.abs(b.x-pixie.x)).slice(0,3);
-        for (const sp of sorted){ sp.y -= 50*dt; }
-      }
-    }
+    // Nema balance: lift up to three spikes near Pixie
+    if (nema.active){ nema.timer -= dt; if (nema.timer<=0){ nema.active=false; } else { const sorted = [...spikes].sort((a,b)=>Math.abs(a.x-pixie.x)-Math.abs(b.x-pixie.x)).slice(0,3); for (const sp of sorted){ sp.y -= 50*dt; } } }
 
     // Particles aging
     for (let i=particles.length-1;i>=0;i--){ const p=particles[i]; p.age+=dt; p.x+=p.vx*dt; p.y+=p.vy*dt; p.vy+=1200*dt; if (p.age>p.life) particles.splice(i,1); }
 
     // Dialogue typewriter
     Dialogue.update(dt);
+
+    // Game over → save best
+    if (gameOver){ best=Math.max(best,score); localStorage.setItem('puppetronics_best', best); bestEl.textContent=best; }
+  }
+
+  function drawEnergyBar(){
+    const x=20, y=18, w=220, h=10; ctx.fillStyle='rgba(255,255,255,.15)'; ctx.fillRect(x,y,w,h); const p = energy/ENERGY_MAX; ctx.fillStyle='rgba(138,227,255,.9)'; ctx.fillRect(x,y,w*p,h); ctx.strokeStyle='rgba(255,255,255,.25)'; ctx.strokeRect(x,y,w,h);
   }
 
   function draw(){
     ctx.clearRect(0,0,WIDTH,HEIGHT);
-
-    // Parallax fiber lines (hint: optical fibers realm)
+    // Parallax fiber lines
     const t = performance.now()/1000; for(let i=0;i<3;i++){ ctx.fillStyle = `rgba(255,255,255,${0.04 + i*0.03})`; const y = 60 + i*28 + Math.sin(t*.6 + i)*8; ctx.fillRect(0,y,WIDTH,1); }
-
     // Ground
-    ctx.fillStyle = '#0e1524'; ctx.fillRect(0, groundY, WIDTH, HEIGHT-groundY);
-    ctx.fillStyle = 'rgba(255,255,255,.05)'; for (let x=0; x<WIDTH; x+=24) ctx.fillRect(x, groundY+24, 12, 2);
-
-    // Spikes (enemies)
+    ctx.fillStyle = '#0e1524'; ctx.fillRect(0, groundY, WIDTH, HEIGHT-groundY); ctx.fillStyle = 'rgba(255,255,255,.05)'; for (let x=0; x<WIDTH; x+=24) ctx.fillRect(x, groundY+24, 12, 2);
+    // Spikes
     for (const sp of spikes){ ctx.fillStyle='rgba(255,179,102,.9)'; ctx.beginPath(); ctx.moveTo(sp.x, sp.y+sp.h); ctx.lineTo(sp.x+sp.w/2, sp.y); ctx.lineTo(sp.x+sp.w, sp.y+sp.h); ctx.closePath(); ctx.fill(); }
-
-    // Sparks (collectibles)
+    // Sparks
     for (const s of sparks){ const g = ctx.createRadialGradient(s.x, s.y, 2, s.x, s.y, s.r); g.addColorStop(0, 'rgba(138,227,255,1)'); g.addColorStop(1, 'rgba(138,227,255,0)'); ctx.fillStyle=g; ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI*2); ctx.fill(); }
-
-    // NPC Spirits (talk triggers)
+    // NPC Spirits
     for (const n of npcs){ const g = ctx.createRadialGradient(n.x, n.y, 2, n.x, n.y, n.r*1.8); g.addColorStop(0, 'rgba(255,138,216,1)'); g.addColorStop(1, 'rgba(255,138,216,0)'); ctx.fillStyle=g; ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, Math.PI*2); ctx.fill(); if (dist(n,pixie)<90){ ctx.fillStyle='rgba(255,255,255,.85)'; ctx.font='600 12px system-ui'; ctx.textAlign='center'; ctx.fillText('Press E to talk', n.x, n.y - n.r - 10); } }
-
-    // Nema trunk (summoned guide)
-    if (nema.active){ ctx.save(); ctx.translate(nema.x, nema.y); ctx.fillStyle='#5b3a23'; ctx.fillRect(-nema.w/2, 0, nema.w, nema.h); // trunk body
-      // rings
-      ctx.fillStyle='rgba(255,255,255,.1)'; for(let i=0;i<6;i++){ ctx.fillRect(-nema.w/2+6*i, 0, 2, nema.h); }
-      // name glow
-      ctx.fillStyle='rgba(138,227,255,.85)'; ctx.font='700 14px system-ui'; ctx.textAlign='center'; ctx.fillText('NEMA', 0, -8);
+    // Nema trunk
+    if (nema.active){ ctx.save(); ctx.translate(nema.x, nema.y); ctx.fillStyle='#5b3a23'; ctx.fillRect(-nema.w/2, 0, nema.w, nema.h); ctx.fillStyle='rgba(255,255,255,.1)'; for(let i=0;i<6;i++){ ctx.fillRect(-nema.w/2+6*i, 0, 2, nema.h); } ctx.fillStyle='rgba(138,227,255,.85)'; ctx.font='700 14px system-ui'; ctx.textAlign='center'; ctx.fillText('NEMA', 0, -8); ctx.restore(); }
+    // Narzis placeholder (shadow figure)
+    if (narzis.active){ ctx.save(); ctx.translate(narzis.x, narzis.y); ctx.fillStyle='rgba(200,40,40,.9)'; ctx.fillRect(-narzis.w/2, -narzis.h, narzis.w, narzis.h); ctx.fillStyle='rgba(255,255,255,.9)'; ctx.fillRect(-6,-narzis.h+10,4,6); ctx.fillRect(2,-narzis.h+10,4,6); // eyes
+      if (narzis.gaslight){ ctx.fillStyle='rgba(255,40,40,.25)'; ctx.fillRect(-narzis.w, -narzis.h-6, narzis.w*2, 6); }
+      if (narzis.stun>0){ ctx.strokeStyle='rgba(255,255,255,.7)'; ctx.strokeRect(-narzis.w/2-3, -narzis.h-3, narzis.w+6, narzis.h+6); }
       ctx.restore(); }
-
-    // Beast (trail / small sprite)
+    // Beast
     ctx.fillStyle='rgba(255,255,255,.2)'; ctx.beginPath(); ctx.arc(beast.x, beast.y, beast.r, 0, Math.PI*2); ctx.fill();
-
-    // Pixie (player)
+    // Pixie
     if (pixie.img){ const w=pixie.r*2*pixie.scale, h=w; ctx.save(); ctx.translate(pixie.x, pixie.y); ctx.drawImage(pixie.img, -w/2, -h/2, w, h); ctx.restore(); }
     else { const grad = ctx.createLinearGradient(pixie.x-pixie.r, pixie.y-pixie.r, pixie.x+pixie.r, pixie.y+pixie.r); grad.addColorStop(0, '#9ae6ff'); grad.addColorStop(1, '#f7b2ff'); ctx.fillStyle=grad; ctx.beginPath(); ctx.arc(pixie.x, pixie.y, pixie.r, 0, Math.PI*2); ctx.fill(); ctx.fillStyle='#0b0b12'; ctx.beginPath(); ctx.arc(pixie.x+5, pixie.y-4, 2.2, 0, Math.PI*2); ctx.fill(); }
-
     // Particles
     for (const p of particles){ const a=1-(p.age/p.life); ctx.fillStyle=p.color.replace(')', `, ${Math.max(0,a)})`).replace('rgb','rgba'); ctx.fillRect(p.x, p.y, 2, 2); }
-
+    // Energy bar HUD (overlay)
+    drawEnergyBar();
     // Game over overlay
-    if (gameOver){ ctx.fillStyle='rgba(0,0,0,.45)'; ctx.fillRect(0,0,WIDTH,HEIGHT); ctx.fillStyle='white'; ctx.textAlign='center'; ctx.font='700 28px system-ui, sans-serif'; ctx.fillText('Pixie fell out of balance', WIDTH/2, HEIGHT/2 - 8); ctx.font='500 16px system-ui, sans-serif'; ctx.fillText('Press R to restart', WIDTH/2, HEIGHT/2 + 18); }
+    if (gameOver){ ctx.fillStyle='rgba(0,0,0,.45)'; ctx.fillRect(0,0,WIDTH,HEIGHT); ctx.fillStyle='white'; ctx.textAlign='center'; ctx.font='700 28px system-ui, sans-serif'; ctx.fillText('Pixie ran out of energy', WIDTH/2, HEIGHT/2 - 8); ctx.font='500 16px system-ui, sans-serif'; ctx.fillText('Press R to restart', WIDTH/2, HEIGHT/2 + 18); }
   }
 
-  // Focus for keyboard
+  // Focus
   canvas.focus();
 })();
 </script>
