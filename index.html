@@ -34,6 +34,25 @@
     .dialog .name{font-weight:800;letter-spacing:.2px;margin-bottom:6px;color:var(--accent)}
     .dialog .text{white-space:pre-wrap;min-height:2.2em}
     .dialog .hint{opacity:.7;font-size:.85rem;margin-top:6px}
+    .intro{
+  position:fixed; inset:0; background:#0b0b12; color:#fff;
+  display:flex; flex-direction:column; align-items:center;
+  justify-content:flex-start; overflow:auto; z-index:9999;
+  padding:2rem 1.2rem;
+}
+.intro h1{ margin:0 0 1rem 0; font-weight:800; letter-spacing:.3px; }
+.characters{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+  gap:1rem; width:min(1200px,100%);
+}
+.card{ background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.1);
+  border-radius:12px; padding:1rem; text-align:center; }
+.card img{ max-width:100%; height:auto; object-fit:contain; border-radius:8px; }
+#startGame{ margin:1.4rem auto 0; background:rgba(255,255,255,.1);
+  border:1px solid rgba(255,255,255,.2); color:#fff; padding:.6rem 1.1rem;
+  border-radius:.55rem; cursor:pointer; }
+#startGame:hover{ background:rgba(255,255,255,.18); }
+
   </style>
 </head>
 <body>
@@ -48,6 +67,22 @@
       <button class="btn" id="pauseBtn" aria-pressed="false">Pause</button>
     </div>
   </header>
+<!-- Intro / Characters Gallery -->
+<div id="introSlide" class="intro">
+  <h1>Meet the Characters</h1>
+  <div class="characters">
+    <div class="card"><img src="assets/pix.png" alt="Pixie"><h2>Pixie</h2><p>Text TBD.</p></div>
+    <div class="card"><img src="assets/pixbst.png" alt="Pixie & Beast"><h2>Pixie & Beast</h2><p>Text TBD.</p></div>
+    <div class="card"><img src="assets/bst.png" alt="Beast"><h2>Beast</h2><p>Text TBD.</p></div>
+    <div class="card"><img src="assets/bstatc.png" alt="Beast Attack"><h2>Beast (Attack)</h2><p>Text TBD.</p></div>
+    <div class="card"><img src="assets/nrz2.png" alt="Narzis Profile"><h2>Narzis</h2><p>Text TBD.</p></div>
+    <div class="card"><img src="assets/nrz3.png" alt="Narzis Front"><h2>Narzis (Front)</h2><p>Text TBD.</p></div>
+    <div class="card"><img src="assets/nema.png" alt="Nema Light"><h2>Nema (Light)</h2><p>Text TBD.</p></div>
+    <div class="card"><img src="assets/tree1.png" alt="Nema Strong"><h2>Nema (Strong)</h2><p>Text TBD.</p></div>
+    <div class="card"><img src="assets/lenlum.png" alt="Lenny & Lumi"><h2>Lenny & Lumi</h2><p>Text TBD.</p></div>
+  </div>
+  <button id="startGame">Start Game</button>
+</div>
 
   <div id="wrap">
     <canvas id="game" width="960" height="540" aria-label="Game canvas" tabindex="0"></canvas>
@@ -78,6 +113,8 @@ canvas.addEventListener('pointerdown', ()=>canvas.focus());
   const bestEl = document.getElementById('best');
   const energyEl = document.getElementById('energy');
   const pauseBtn = document.getElementById('pauseBtn');
+  const introSlide = document.getElementById('introSlide');
+const startGameBtn = document.getElementById('startGame');
   const assetPicker = document.getElementById('assetPicker');
   const dialogEl = document.getElementById('dialog');
   const dnameEl = document.getElementById('dname');
@@ -111,7 +148,7 @@ canvas.addEventListener('pointerdown', ()=>canvas.focus());
   window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
 
   // Pause
-  let paused=false; pauseBtn.onclick=()=>{paused=!paused; pauseBtn.setAttribute('aria-pressed',paused); pauseBtn.textContent=paused?'Resume':'Pause';};
+  let paused = true; pauseBtn.onclick=()=>{paused=!paused; pauseBtn.setAttribute('aria-pressed',paused); pauseBtn.textContent=paused?'Resume':'Pause';};
 
   // Score & Energy
   let score=0; let best=Number(localStorage.getItem('puppetronics_best')||0); bestEl.textContent=best;
